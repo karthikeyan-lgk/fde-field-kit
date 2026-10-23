@@ -1,0 +1,50 @@
+# The FDE's Collector: receives OBI's spans and metrics, draws the service graph from the spans,
+# sends traces to Jaeger and metrics to Prometheus.
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  memory_limiter:
+    check_interval: 1s
+    limit_percentage: 80
+    spike_limit_percentage: 20
+  batch: {}
+
+connectors:
+  # Pairs every client span with the server span it called and counts the edge between them.
+  # Calls to something that sends no spans (the LLM provider) become a "virtual" node, named from
+  # the client span's peer attributes.
+  service_graph:
+    latency_histogram_buckets: [10ms, 50ms, 100ms, 500ms, 1s, 2s, 5s]
+    store:
+      ttl: 5s
+      max_items: 5000
+    virtual_node_peer_attributes: [peer.service, server.address, db.system]
+    virtual_node_extra_label: true
+    metrics_flush_interval: 15s
+
+exporters:
+  otlp_grpc/jaeger:
+    endpoint: jaeger:4317
+    tls:
+      insecure: true
+  otlp_http/prometheus:
+    endpoint: http://prometheus:9090/api/v1/otlp
+  debug:
+    verbosity: basic
+
+service:
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [memory_limiter, batch]
+      exporters: [otlp_grpc/jaeger, service_graph]
+    metrics:
+      receivers: [otlp, service_graph]
+      processors: [memory_limiter, batch]
+      exporters: [otlp_http/prometheus]

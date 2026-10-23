@@ -1,0 +1,13 @@
+# OBI: OpenTelemetry eBPF Instrumentation. Watches every process listening on PayKaro's ports from
+# the kernel, so no service needs an SDK. Names come from each process's OTEL_SERVICE_NAME.
+discovery:
+  instrument:
+    - open_ports: 8000-8004,8443
+      containers_only: true
+ebpf:
+  # Pass trace context between services in HTTP headers, so one login is one trace.
+  context_propagation: tcp
+otel_traces_export:
+  endpoint: http://collector:4318
+otel_metrics_export:
+  endpoint: http://collector:4318

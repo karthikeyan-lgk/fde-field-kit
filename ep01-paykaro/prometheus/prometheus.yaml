@@ -1,0 +1,11 @@
+global:
+  scrape_interval: 15s
+
+# Metrics arrive over OTLP from the Collector (--web.enable-otlp-receiver), not by scraping.
+otlp:
+  promote_resource_attributes:
+    - service.name
+
+storage:
+  tsdb:
+    out_of_order_time_window: 30m

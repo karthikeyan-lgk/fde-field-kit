@@ -1,0 +1,264 @@
+{
+  "uid": "paykaro",
+  "title": "PayKaro \u2014 day 1 (FDE)",
+  "time": {
+    "from": "now-15m",
+    "to": "now"
+  },
+  "refresh": "10s",
+  "schemaVersion": 41,
+  "panels": [
+    {
+      "id": 1,
+      "type": "table",
+      "title": "What actually talks to what (service graph from OBI's spans, no SDK)",
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 24,
+        "h": 13
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum by (client, server, virtual_node) (rate(traces_service_graph_request_total{client!=\"user\"}[5m])) * 60",
+          "format": "table",
+          "instant": true,
+          "range": false
+        }
+      ],
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true
+            },
+            "indexByName": {
+              "client": 0,
+              "server": 1,
+              "Value": 2,
+              "virtual_node": 3
+            },
+            "renameByName": {
+              "client": "caller",
+              "server": "calls",
+              "Value": "requests / min",
+              "virtual_node": "sends no telemetry"
+            }
+          }
+        },
+        {
+          "id": "sortBy",
+          "options": {
+            "sort": [
+              {
+                "field": "requests / min",
+                "desc": true
+              }
+            ]
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "left"
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "requests / min"
+            },
+            "properties": [
+              {
+                "id": "decimals",
+                "value": 0
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "md"
+      }
+    },
+    {
+      "id": 2,
+      "type": "timeseries",
+      "title": "SMS vendor: accepted vs rejected for quota (per min)",
+      "gridPos": {
+        "x": 0,
+        "y": 13,
+        "w": 12,
+        "h": 9
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum by (http_response_status_code) (rate(http_server_request_duration_seconds_count{service_name=\"sms-vendor\", http_route=\"/v1/messages\"}[3m])) * 60",
+          "format": "time_series",
+          "instant": false,
+          "range": true,
+          "legendFormat": "{{http_response_status_code}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqpm"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "429"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "red"
+                }
+              },
+              {
+                "id": "displayName",
+                "value": "429 quota exceeded"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "200"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "green"
+                }
+              },
+              {
+                "id": "displayName",
+                "value": "200 accepted"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": 3,
+      "type": "timeseries",
+      "title": "Support bot: chats and resend_otp calls (per min)",
+      "gridPos": {
+        "x": 12,
+        "y": 13,
+        "w": 12,
+        "h": 9
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum(rate(http_server_request_duration_seconds_count{service_name=\"support-bot\", http_route=\"/chat\"}[3m])) * 60",
+          "format": "time_series",
+          "instant": false,
+          "range": true,
+          "legendFormat": "chats"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum(rate(http_client_request_duration_seconds_count{service_name=\"support-bot\", server_address=\"otp-service\"}[3m])) * 60",
+          "format": "time_series",
+          "instant": false,
+          "range": true,
+          "legendFormat": "resend_otp calls"
+        },
+        {
+          "refId": "C",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum(rate(http_client_request_duration_seconds_count{service_name=\"support-bot\", server_address=\"openrouter.ai\"}[3m])) * 60",
+          "format": "time_series",
+          "instant": false,
+          "range": true,
+          "legendFormat": "LLM calls"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqpm"
+        }
+      }
+    },
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "otp-service \u2192 egress-proxy: send time p50 / p95",
+      "gridPos": {
+        "x": 0,
+        "y": 22,
+        "w": 24,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "histogram_quantile(0.5, sum by (le) (rate(http_client_request_duration_seconds_bucket{service_name=\"otp-service\", server_address=\"egress-proxy\"}[3m])))",
+          "format": "time_series",
+          "instant": false,
+          "range": true,
+          "legendFormat": "p50"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(http_client_request_duration_seconds_bucket{service_name=\"otp-service\", server_address=\"egress-proxy\"}[3m])))",
+          "format": "time_series",
+          "instant": false,
+          "range": true,
+          "legendFormat": "p95"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        }
+      }
+    }
+  ]
+}

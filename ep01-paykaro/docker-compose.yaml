@@ -1,0 +1,130 @@
+# PayKaro: the "customer's system" for FDE Field Kit Ep 01 (a fictional fintech).
+# The app services carry no OpenTelemetry at all. OTEL_SERVICE_NAME is only an environment variable
+# that OBI reads from each process to name it; nothing in the containers uses it.
+
+x-svc: &svc
+  build: services
+  image: paykaro:lab
+
+services:
+  login:
+    <<: *svc
+    command: ["uvicorn", "login:app", "--host", "0.0.0.0", "--port", "8000"]
+    environment:
+      OTEL_SERVICE_NAME: login
+      AUTH_URL: http://auth:8001
+    ports: ["8000:8000"]
+
+  auth:
+    <<: *svc
+    command: ["uvicorn", "auth:app", "--host", "0.0.0.0", "--port", "8001"]
+    environment:
+      OTEL_SERVICE_NAME: auth
+      OTP_URL: http://otp-service:8002
+
+  otp-service:
+    <<: *svc
+    command: ["uvicorn", "otp:app", "--host", "0.0.0.0", "--port", "8002"]
+    environment:
+      OTEL_SERVICE_NAME: otp-service
+      EGRESS_URL: https://egress-proxy:8443
+      OTP_SENDERS: "2"
+      RESEND_COOLDOWN_S: ${RESEND_COOLDOWN_S:-0}
+
+  # The bank's network team owns this one. The inspection delay is simulated (see services/proxy.py).
+  egress-proxy:
+    <<: *svc
+    command: ["python", "proxy.py"]
+    environment:
+      OTEL_SERVICE_NAME: egress-proxy
+      UPSTREAM_URL: http://sms-vendor:8003
+      HANDSHAKE_DELAY_S: ${HANDSHAKE_DELAY_S:-1.7}
+
+  # A third party. In real life it's on the internet; here it's a mock with a shared per-minute quota.
+  sms-vendor:
+    <<: *svc
+    command: ["uvicorn", "smsvendor:app", "--host", "0.0.0.0", "--port", "8003"]
+    environment:
+      OTEL_SERVICE_NAME: sms-vendor
+      SMS_QUOTA_PER_MIN: ${SMS_QUOTA_PER_MIN:-90}
+      SMS_RESEND_QUOTA_PER_MIN: ${SMS_RESEND_QUOTA_PER_MIN:-0}
+      CARRIER_URL: http://carrier:9000
+    ports: ["8003:8003"]
+
+  # The telecom network that puts the SMS on the user's phone. Not PayKaro's, not watched by OBI.
+  carrier:
+    <<: *svc
+    command: ["uvicorn", "carrier:app", "--host", "0.0.0.0", "--port", "9000"]
+
+  # The bot nobody owns. Put LLM_API_KEY in a .env file next to this one (never in git).
+  support-bot:
+    <<: *svc
+    command: ["uvicorn", "bot:app", "--host", "0.0.0.0", "--port", "8004", "--workers", "4"]
+    environment:
+      OTEL_SERVICE_NAME: support-bot
+      AUTH_URL: http://auth:8001
+      OTP_URL: http://otp-service:8002
+      LLM_BASE_URL: ${LLM_BASE_URL:-https://openrouter.ai/api/v1}
+      LLM_API_KEY: ${LLM_API_KEY:-}
+      LLM_MODEL: ${LLM_MODEL:-openai/gpt-4o-mini}
+    ports: ["8004:8004"]
+
+  users:
+    <<: *svc
+    command: ["python", "users.py"]
+    environment:
+      APP_URL: http://login:8000
+      BOT_URL: http://support-bot:8004
+      PHONE_URL: http://carrier:9000
+      LOGINS_PER_SEC: ${LOGINS_PER_SEC:-1.3}
+      PATIENCE_S: ${PATIENCE_S:-15}
+      BOT_ENABLED: ${BOT_ENABLED:-true}
+      CHAT_BUDGET_PER_MIN: ${CHAT_BUDGET_PER_MIN:-30}
+    depends_on: [login, support-bot, carrier]
+
+  # ---- What the FDE brings: nothing above changes. ----
+
+  obi:
+    image: otel/ebpf-instrument:v1.0.0-rc.2
+    pid: host
+    privileged: true
+    volumes:
+      - ./obi/config.yaml:/config.yaml:ro
+      - /sys/kernel/tracing:/sys/kernel/tracing
+      - /sys/fs/cgroup:/sys/fs/cgroup
+    environment:
+      OTEL_EBPF_CONFIG_PATH: /config.yaml
+    depends_on: [collector]
+
+  collector:
+    image: otel/opentelemetry-collector-contrib:0.162.0
+    command: ["--config=/etc/otelcol/config.yaml"]
+    volumes:
+      - ./collector/config.yaml:/etc/otelcol/config.yaml:ro
+    ports: ["4317:4317", "4318:4318"]
+    depends_on: [jaeger, prometheus]
+
+  jaeger:
+    image: jaegertracing/jaeger:2.22.0
+    ports: ["16686:16686"]
+
+  prometheus:
+    image: prom/prometheus:v3.15.0
+    command:
+      - --config.file=/etc/prometheus/prometheus.yaml
+      - --web.enable-otlp-receiver
+    volumes:
+      - ./prometheus/prometheus.yaml:/etc/prometheus/prometheus.yaml:ro
+    ports: ["9090:9090"]
+
+  grafana:
+    image: grafana/grafana:13.2.4
+    environment:
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Admin
+      GF_AUTH_DISABLE_LOGIN_FORM: "true"
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+    ports: ["3000:3000"]
+    depends_on: [prometheus, jaeger]
